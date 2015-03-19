@@ -20264,6 +20264,45 @@ test_420()
 }
 run_test 420 "clear SGID bit on non-directories for non-members"
 
+test_421() {
+	test_mkdir -c1 $DIR/$tdir
+
+	lru_resize_disable mdc
+	lru_resize_disable osc
+
+	for i in $(seq -w 0001 1000); do
+		local t=$DIR/$tfile_$i
+
+		do_facet_create_file client $t 1K > /dev/null 2>&1 ||
+			error_noexit "Create file $t"
+	done
+
+	for oscparam in $($LCTL list_param ldlm.namespaces.*-OST*-osc-ffff*);
+	do
+		local lru_size=$($LCTL get_param -n $oscparam.lru_size)
+		local lock_count=$($LCTL get_param -n $oscparam.lock_count)
+
+		#define LDLM_LRU_EXCESS_LIMIT 16
+		[ $lock_count -le $((lru_size + 16)) ] ||
+			error "osc lock count exceeding lru size"
+	done
+
+	for mdcparam in $($LCTL list_param ldlm.namespaces.*mdc-*); do
+		local lru_size=$($LCTL get_param -n $mdcparam.lru_size)
+		local lock_count=$($LCTL get_param -n $mdcparam.lock_count)
+
+		#define LDLM_LRU_EXCESS_LIMIT 16
+		[ $lock_count -le $((lru_size + 16)) ] ||
+			error "mdc lock count exceeding lru size"
+	done
+
+	rm -rf $DIR/$tdir || error "remove dir error"
+
+	lru_resize_enable mdc
+	lru_resize_enable osc
+}
+run_test 421 "lock count should not exceed lru size"
+
 prep_801() {
 	[[ $(lustre_version_code mds1) -lt $(version_code 2.9.55) ]] ||
 	[[ $OST1_VERSION -lt $(version_code 2.9.55) ]] &&
