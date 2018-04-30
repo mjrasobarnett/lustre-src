@@ -3278,7 +3278,7 @@ struct hsm_progress_kernel {
 	struct hsm_extent	hpk_extent;
 	__u16			hpk_flags;
 	__u16			hpk_errval; /* positive val */
-	__u32			hpk_padding1;
+	__u32			hpk_archive_id;
 	/* Additional fields */
 	__u64			hpk_data_version;
 	__u64			hpk_padding2;

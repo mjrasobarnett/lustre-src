@@ -74,6 +74,7 @@
 #include <linux/lustre/lustre_param.h>
 #include <linux/lnet/nidstr.h>
 #include <cyaml.h>
+#include "callvpe.h"
 
 #ifndef ARRAY_SIZE
 # define ARRAY_SIZE(a) ((sizeof(a)) / (sizeof((a)[0])))
@@ -113,6 +114,7 @@ static int lfs_hsm_restore(int argc, char **argv);
 static int lfs_hsm_release(int argc, char **argv);
 static int lfs_hsm_remove(int argc, char **argv);
 static int lfs_hsm_cancel(int argc, char **argv);
+static int lfs_hsm_upcall(int argc, char **argv);
 static int lfs_swap_layouts(int argc, char **argv);
 static int lfs_mv(int argc, char **argv);
 static int lfs_ladvise(int argc, char **argv);
@@ -519,6 +521,9 @@ command_t cmdlist[] = {
 	{"hsm_cancel", lfs_hsm_cancel, 0,
 	 "Cancel requests related to specified files.\n"
 	 "usage: hsm_cancel [--filelist FILELIST] [--data DATA] <file> ..."},
+	{"hsm_upcall", lfs_hsm_upcall, 0,
+	 "HSM upcall mediator.\n"
+	 "usage: hsm_upcall [OPTION...] ACTION FSNAME ARCHIVE_ID FLAGS DATA FID..."},
 	{"swap_layouts", lfs_swap_layouts, 0, "Swap layouts between 2 files.\n"
 	 "usage: swap_layouts <path1> <path2>"},
 	{"migrate", lfs_setstripe_migrate, 0,
@@ -7356,6 +7361,264 @@ static int lfs_hsm_remove(int argc, char **argv)
 static int lfs_hsm_cancel(int argc, char **argv)
 {
 	return lfs_hsm_request(argc, argv, HUA_CANCEL);
+}
+
+static int lfs_hsm_upcall_1(struct llapi_hsm_upcall_private *hup,
+			    const char *worker_argv[],
+			    enum hsm_copytool_action action,
+			    const char *fsname,
+			    __u32 archive_id,
+			    __u16 flags,
+			    const struct lu_fid *fid)
+{
+	__u64 data_version = 0;
+	int wrc = 0;
+	int rc;
+
+	/* FIXME Duplication of information between worker_argv and
+	 * parameters to this function. We should build worker_argv
+	 * rather than the caller. */
+
+	rc = llapi_hsm_upcall_action_begin(hup, action, archive_id, flags, fid,
+					   &data_version);
+	if (rc < 0) {
+		fprintf(stderr,
+			"%s: cannot begin HSM action on %s/"DFID": %s\n",
+			progname, fsname, PFID(fid), strerror(-rc));
+		return rc;
+	}
+
+	if (action == HSMA_ARCHIVE) {
+		struct hsm_user_state hus;
+		int fd;
+
+		/* Invoke the worker with stdin opened to the file to
+		 * be archived which was returned from
+		 * llapi_hsm_upcall_action_begin(). The caller should
+		 * save and restore stdin. */
+		fd = rc;
+		rc = 0;
+
+		/* XXX Should we fixup archive_id automatically? Would
+		 * need to change corresponding element of worker_ags
+		 * as well. */
+		rc = llapi_hsm_state_get_fd(fd, &hus);
+		if (rc < 0) {
+			fprintf(stderr,
+				"%s: cannot get HSM state of %s/"DFID": %s\n",
+				progname, fsname, PFID(fid), strerror(-rc));
+			return rc;
+		}
+
+		if ((hus.hus_states & HS_EXISTS) &&
+		    hus.hus_archive_id != archive_id) {
+			fprintf(stderr,
+				"%s: cannot change archive ID of %s/"DFID"\n",
+				progname, fsname, PFID(fid));
+			return -EINVAL;
+		}
+
+		/* It would be nice to skip unneeded archive based on
+		 * HSM state and data_version. But hsm_user_state does
+		 * not include data version. */
+
+		if (fd != STDIN_FILENO && dup2(fd, STDIN_FILENO) < 0) {
+			wrc = -errno;
+			fprintf(stderr,
+				"%s: cannot duplicate FD for %s/"DFID": %s\n",
+				progname, fsname, PFID(fid), strerror(errno));
+			/* If dup2() failed then try to close FD anyway. */
+		}
+
+		if (fd != STDIN_FILENO && close(fd) < 0) {
+			wrc = -errno;
+			fprintf(stderr,
+				"%s: cannot close %d %s/"DFID": %s\n",
+				progname, fd, fsname, PFID(fid), strerror(errno));
+		}
+
+		if (wrc < 0)
+			goto end;
+
+		/* TODO Check if the file is already archived and if
+		 * the archived data version is the same as the
+		 * current. Also check that archive_id agrees. */
+	}
+
+	/* TODO For remove, check that the file is not released. Or
+	 * this could be done by the MDT in the start progress
+	 * handler. */
+
+	wrc = callvpe(worker_argv[0], (char *const *)worker_argv, environ);
+	if (wrc < 0) {
+		fprintf(stderr,
+			"%s: worker '%s' returned status %d for HSM action on "
+			"%s/"DFID": %s\n",
+			progname, worker_argv[0], wrc, fsname, PFID(fid),
+			strerror(-wrc));
+	}
+
+	if (action == HSMA_ARCHIVE) {
+		if (close(STDIN_FILENO) < 0) {
+			wrc = -errno;
+			fprintf(stderr, "%s: cannot close %s/"DFID": %s\n",
+				progname, fsname, PFID(fid), strerror(errno));
+		}
+	}
+
+end:
+	rc = llapi_hsm_upcall_action_end(hup, action, archive_id, flags, fid,
+					 data_version, wrc);
+	if (rc < 0) {
+		fprintf(stderr,
+			"%s: cannot end HSM action on %s/"DFID": %s\n",
+			progname, fsname, PFID(fid), strerror(-rc));
+	}
+
+	return rc < 0 ? rc : -abs(wrc);
+}
+
+static int lfs_hsm_upcall(int argc, char **argv)
+{
+	struct option opts[] = {
+		{ .name = "mount", .val = 'M', .has_arg = required_argument },
+		{ .name = NULL, },
+	};
+	struct llapi_hsm_upcall_private *hup = NULL;
+	char mount_buf[PATH_MAX] = "";
+	const char *mount = NULL;
+	const char *worker_path;
+	const char *action_arg;
+	const char *fsname_arg;
+	const char *archive_id_arg;
+	const char *flags_arg;
+	const char *data_arg;
+	enum hsm_copytool_action action;
+	__u32 archive_id;
+	__u16 flags;
+	int stdin_saved = -1;
+	int c;
+	int i;
+	int rc = 0;
+
+	optind = 0;
+
+	while ((c = getopt_long(argc, argv, "M:", opts, NULL)) != -1) {
+		switch (c) {
+		case 'M':
+			mount = optarg;
+			break;
+		case '?':
+			return CMD_HELP;
+		}
+	}
+
+	if (argc - optind < 6)
+		return CMD_HELP;
+
+	/* lfs hsm_upcall WORKER ACTION FSNAME ARCHIVE_ID FLAGS DATA FID... */
+	worker_path = argv[optind];
+	action_arg = argv[optind + 1];
+	fsname_arg = argv[optind + 2];
+	archive_id_arg = argv[optind + 3];
+	flags_arg = argv[optind + 4];
+	data_arg = argv[optind + 5];
+
+	if (strcmp(action_arg, "ARCHIVE") == 0) {
+		action = HSMA_ARCHIVE;
+	} else if (strcmp(action_arg, "REMOVE") == 0) {
+		action = HSMA_REMOVE;
+	} else {
+		fprintf(stderr, "%s: unsupported action '%s'\n",
+			argv[0], action_arg);
+		return -EINVAL;
+	}
+
+	archive_id = strtoul(archive_id_arg, NULL, 0);
+	flags = strtoul(flags_arg, NULL, 0);
+
+	if (mount == NULL) {
+		rc = llapi_search_rootpath(mount_buf, fsname_arg);
+		if (rc < 0) {
+			fprintf(stderr,
+				"%s: cannot get mount point for '%s': %s\n",
+				progname, fsname_arg, strerror(-rc));
+			return rc;
+		}
+
+		mount = mount_buf;
+	}
+
+	rc = llapi_hsm_upcall_init(&hup, mount);
+	if (rc < 0) {
+		fprintf(stderr,
+			"%s: cannot initialize HSM upcall for '%s': %s\n",
+			progname, mount, strerror(-rc));
+		return 1;
+	}
+
+	stdin_saved = dup(STDIN_FILENO);
+	if (stdin_saved < 0) {
+		rc = -errno;
+		fprintf(stderr, "%s: cannot duplicate stdin: %s\n",
+			progname, strerror(errno));
+		goto out_hup;
+	}
+
+	for (i = optind + 6; i < argc; i++) {
+		const char *fid_arg = argv[i];
+		const char *worker_argv[] = {
+			worker_path,
+			action_arg,
+			fsname_arg,
+			archive_id_arg,
+			flags_arg,
+			data_arg,
+			fid_arg,
+			NULL,
+		};
+		struct lu_fid fid;
+		const char *s = fid_arg;
+		int n;
+		int rc1;
+
+		if (*s == '[')
+			s++;
+
+		n = sscanf(s, SFID, RFID(&fid));
+		if (n != 3) {
+			fprintf(stderr, "%s: invalid FID '%s'\n",
+				progname, fid_arg);
+			rc = -EINVAL;
+			continue;
+		}
+
+		rc1 = lfs_hsm_upcall_1(hup, worker_argv, action, fsname_arg,
+				       archive_id, flags, &fid);
+		if (rc1 < 0) {
+			fprintf(stderr, "%s: cannot %s %s/'%s': (%d) %s\n",
+				progname, action_arg, fsname_arg, fid_arg,
+				rc1, strerror(-rc1));
+			rc = rc1;
+		}
+	}
+
+	if (dup2(stdin_saved, STDIN_FILENO) < 0) {
+		rc = -errno;
+		fprintf(stderr, "%s: cannot restore stdin: %s\n",
+			progname, strerror(errno));
+	}
+
+	if (close(stdin_saved) < 0) {
+		rc = -errno;
+		fprintf(stderr, "%s: cannot close saved stdin: %s\n",
+			progname, strerror(errno));
+	}
+
+out_hup:
+	llapi_hsm_upcall_fini(&hup);
+
+	return rc;
 }
 
 static int lfs_swap_layouts(int argc, char **argv)

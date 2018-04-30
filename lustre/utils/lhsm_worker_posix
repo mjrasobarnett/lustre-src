@@ -1,0 +1,140 @@
+#!/bin/bash
+
+PROGNAME="$(basename $0)" # lhsm_worker_posix
+LHSM_ARCHIVE_BASE=${LHSM_ARCHIVE_BASE:-/tmp/arc} # CHANGEME
+
+# This scipt is intended to be used as a worker for 'lfs hsm_upcall'.
+#
+# If 'lfs hsm_upcall' is invoked as
+#   lfs hsm_upcall lhsm_worker_posix ACTION FSNAME ARCHIVE_ID FLAGS DATA FID...
+# then 'lfs hsm_upcall' will invoke this script for each fid in FID... as
+#   lhsm_worker_posix ACTION FSNAME ARCHIVE_ID FLAGS DATA $fid
+#
+# The only supported ACTIONs are ARCHIVE and REMOVE.
+#
+# FSNAME will be the name of a Lustre filesystem ('lustre', 'scratch',
+# ...) that must be mounted (as a client) on the local node when 'lfs
+# hsm_upcall' is invoked. (Note that there is also a --mount=PATH
+# option for 'lfs hsm_upcall' to skip FS name to mount search.) As
+# with lhsmtool_posix, for reasons of safety and performance the 'lfs
+# hsm_upcall' workload should be given a dedicated client mount.
+#
+# For ARCHIVE, 'lfs hsm_upcall' will call this script with stdin
+# opened to the Lustre file to be archived. This script should then
+# copy from stdin to the archive.
+#
+# For REMOVE, this script should remove the file named by fid from the
+# archive.
+#
+# FLAGS should be ignored.
+#
+# DATA is whatever was used as the argument to the --data option of
+# 'lfs hsm_{archive,remove}'. If the --data option was not used then
+# DATA will be the empty string ''.
+#
+# The idea is that 'lfs hsm_upcall' knows about Lustre HSM and this
+# script knows about the archive.
+#
+# Note that this script is only intended to illustrate the HSM upcall
+# and worker concept. It assumes that that archive I is mounted
+# locally at /tmp/arc$I and that the archive layout is the one used by
+# lhsmtool_posix. Reasonable care is taken for error detection. You
+# should modify it as needed to support other archive layouts.
+#
+# Customization points are marked 'CHANGEME'.
+
+fid_to_archive_path()
+{
+    # Given a FID, print the relative path to that file in the HSM
+    # archive for the (deeply nested, suboptimal) archive layout used
+    # by lhsmtool_posix.
+    #
+    # CHANGEME: Modify this function to support the archive layout
+    # your copytool uses.
+    local fid="$1"
+    local -a v
+    local seq
+    local oid
+
+    # Strip brackets.
+    fid=${fid#[}
+    fid=${fid%]}
+
+    # Split into (seq oid ver).
+    v=(${fid//:/ })
+    seq=${v[0]}
+    oid=${v[1]}
+
+    printf '%04x/%04x/%04x/%04x/%04x/%04x/%s' \
+        $((oid & 0xffff)) \
+        $(((oid >> 16) & 0xffff)) \
+        $((seq & 0xffff)) \
+        $(((seq >> 16) & 0xffff)) \
+        $(((seq >> 32) & 0xffff)) \
+        $(((seq >> 48) & 0xffff)) \
+        "$fid"
+}
+
+archive()
+{
+    local path="$1"
+    local temp
+
+    # TODO Save lov.
+
+    # lfs hsm_upcall invokes us with stdin open to the Lustre file to
+    # be archived.
+
+    # Safety check.
+    if ! [ -f /dev/stdin ]; then
+	echo "$PROGNAME: stdin is not a reqular file" >&2
+	return 1
+    fi
+
+    if ! mkdir -p "$(dirname "$path")"; then
+	return 1
+    fi
+
+    temp="$(mktemp "$path".XXXXXXXX)"
+
+    # CHANGEME: Replace dd as needed for your archive.
+    if ! dd of="$temp" bs=1M conv=fdatasync; then
+	rm -f "$temp"
+	return 1
+    fi
+
+    mv "$temp" "$path"
+}
+
+main()
+{
+    local action="$1"
+    local fsname="$2" # You may use or ignore fsname as you choose.
+    local archive_id="$3"
+    local flags="$4" # You should ignore flags for now.
+    local data="$5" # Opaque to lustre. Passed through for interpretation here.
+    local fid="$6"
+    local archive_root="${LHSM_ARCHIVE_BASE}${archive_id}" # CHANGEME
+    local path="${archive_root}"/"$(fid_to_archive_path "$fid")"
+
+    # Safety check since we use 'mkdir -p' in archive().
+    if ! [ -d "${archive_root}" ]; then
+	echo "$PROGNAME: archive root '${archive_root}' is not a directory" >&2
+	return 1
+    fi
+
+    case $action in
+	ARCHIVE)
+	    archive "$path"
+	    ;;
+	REMOVE)
+	    rm -f "$path" "$path".lov
+	    ;;
+	*)
+	    echo "$PROGNAME: unsupported action '$action'" >&2
+	    return 1
+	    ;;
+    esac
+}
+
+main "$@"

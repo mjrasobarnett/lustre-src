@@ -177,6 +177,8 @@ struct coordinator {
 	__u64			 cdt_user_request_mask;
 	__u64			 cdt_group_request_mask;
 	__u64			 cdt_other_request_mask;
+	__u64			 cdt_upcall_mask;
+	char			 cdt_upcall_path[PATH_MAX];
 
 	/* Remove archive on last unlink policy */
 	bool			 cdt_remove_archive_on_last_unlink;
@@ -939,6 +941,13 @@ int mdt_hsm_find_best_agent(struct coordinator *cdt, __u32 archive,
 			    struct obd_uuid *uuid);
 int mdt_hsm_agent_send(struct mdt_thread_info *mti, struct hsm_action_list *hal,
 		       bool purge);
+/* mdt/mdt_hsm_upcall.c */
+int mdt_hsm_upcall(struct mdt_thread_info *info,
+		   enum hsm_copytool_action action,
+		   const struct hsm_request *hr,
+		   const struct hsm_user_item *hui,
+		   const void *data);
+
 /* mdt/mdt_hsm_cdt_client.c */
 int mdt_hsm_add_actions(struct mdt_thread_info *info,
 			struct hsm_action_list *hal);

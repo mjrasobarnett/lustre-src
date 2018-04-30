@@ -1333,7 +1333,9 @@ out:
  */
 static int hsm_cdt_request_completed(struct mdt_thread_info *mti,
 				     struct hsm_progress_kernel *pgs,
-				     const struct cdt_agent_req *car,
+				     enum hsm_copytool_action action,
+				     const struct lu_fid *fid,
+				     const struct lu_fid *dfid,
 				     enum agent_req_status *status)
 {
 	const struct lu_env	*env = mti->mti_env;
@@ -1351,7 +1353,7 @@ static int hsm_cdt_request_completed(struct mdt_thread_info *mti,
 
 	/* find object by FID, mdt_hsm_get_md_hsm() returns obj or err
 	 * if error/removed continue anyway to get correct reporting done */
-	obj = mdt_hsm_get_md_hsm(mti, &car->car_hai->hai_fid, &mh);
+	obj = mdt_hsm_get_md_hsm(mti, fid, &mh);
 	/* we will update MD HSM only if needed */
 	is_mh_changed = false;
 
@@ -1402,7 +1404,7 @@ static int hsm_cdt_request_completed(struct mdt_thread_info *mti,
 			hsm_set_cl_error(&cl_flags, pgs->hpk_errval);
 		}
 
-		switch (car->car_hai->hai_action) {
+		switch (action) {
 		case HSMA_ARCHIVE:
 			hsm_set_cl_event(&cl_flags, HE_ARCHIVE);
 			break;
@@ -1425,13 +1427,13 @@ static int hsm_cdt_request_completed(struct mdt_thread_info *mti,
 			       " %d is an unknown action\n",
 			       mdt_obd_name(mdt),
 			       pgs->hpk_cookie, PFID(&pgs->hpk_fid),
-			       car->car_hai->hai_action);
+			       action);
 			rc = -EINVAL;
 			break;
 		}
 	} else {
 		*status = ARS_SUCCEED;
-		switch (car->car_hai->hai_action) {
+		switch (action) {
 		case HSMA_ARCHIVE:
 			hsm_set_cl_event(&cl_flags, HE_ARCHIVE);
 			/* set ARCHIVE keep EXIST and clear LOST and
@@ -1470,7 +1472,7 @@ static int hsm_cdt_request_completed(struct mdt_thread_info *mti,
 			CERROR("%s: Successful request %#llx on "DFID" %d is an unknown action\n",
 			       mdt_obd_name(mdt),
 			       pgs->hpk_cookie, PFID(&pgs->hpk_fid),
-			       car->car_hai->hai_action);
+			       action);
 			rc = -EINVAL;
 			break;
 		}
@@ -1492,12 +1494,11 @@ static int hsm_cdt_request_completed(struct mdt_thread_info *mti,
 	/* we give back layout lock only if restore was successful or
 	 * if no retry will be attempted and if object is still alive,
 	 * in other cases we just unlock the object */
-	if (car->car_hai->hai_action == HSMA_RESTORE) {
+	if (action == HSMA_RESTORE) {
 		/* restore in data FID done, we swap the layouts
 		 * only if restore is successful */
 		if (pgs->hpk_errval == 0 && !IS_ERR(obj)) {
-			rc = hsm_swap_layouts(mti, obj, &car->car_hai->hai_dfid,
-					      &mh);
+			rc = hsm_swap_layouts(mti, obj, dfid, &mh);
 			if (rc) {
 				if (cdt->cdt_policy & CDT_NORETRY_ACTION)
 					*status = ARS_FAILED;
@@ -1511,11 +1512,10 @@ static int hsm_cdt_request_completed(struct mdt_thread_info *mti,
 		/* restore special case, need to create ChangeLog record
 		 * before to give back layout lock to avoid concurrent
 		 * file updater to post out of order ChangeLog */
-		mo_changelog(env, CL_HSM, cl_flags, mdt->mdt_child,
-			     &car->car_hai->hai_fid);
+		mo_changelog(env, CL_HSM, cl_flags, mdt->mdt_child, fid);
 		need_changelog = false;
 
-		cdt_restore_handle_del(mti, cdt, &car->car_hai->hai_fid);
+		cdt_restore_handle_del(mti, cdt, fid);
 	}
 
 	GOTO(out, rc);
@@ -1523,8 +1523,7 @@ static int hsm_cdt_request_completed(struct mdt_thread_info *mti,
 out:
 	/* always add a ChangeLog record */
 	if (need_changelog)
-		mo_changelog(env, CL_HSM, cl_flags, mdt->mdt_child,
-			     &car->car_hai->hai_fid);
+		mo_changelog(env, CL_HSM, cl_flags, mdt->mdt_child, fid);
 
 	if (!IS_ERR(obj))
 		mdt_object_put(mti->mti_env, obj);
@@ -1542,54 +1541,73 @@ out:
 int mdt_hsm_update_request_state(struct mdt_thread_info *mti,
 				 struct hsm_progress_kernel *pgs)
 {
-	struct mdt_device	*mdt = mti->mti_mdt;
-	struct coordinator	*cdt = &mdt->mdt_coordinator;
-	struct cdt_agent_req	*car;
-	int			 rc = 0;
+	struct mdt_device *mdt = mti->mti_mdt;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	struct cdt_agent_req *car = NULL;
+	enum hsm_copytool_action action;
+	const struct lu_fid *fid;
+	const struct lu_fid *dfid;
+	int rc = 0;
 	ENTRY;
 
 	/* no coordinator started, so we cannot serve requests */
 	if (cdt->cdt_state == CDT_STOPPED)
 		RETURN(-EAGAIN);
 
-	/* first do sanity checks */
-	car = mdt_cdt_update_request(cdt, pgs);
-	if (IS_ERR(car)) {
-		CERROR("%s: Cannot find running request for cookie %#llx"
-		       " on fid="DFID"\n",
-		       mdt_obd_name(mdt),
-		       pgs->hpk_cookie, PFID(&pgs->hpk_fid));
-
-		RETURN(PTR_ERR(car));
-	}
-
 	CDEBUG(D_HSM, "Progress received for fid="DFID" cookie=%#llx"
-		      " action=%s flags=%d err=%d fid="DFID" dfid="DFID"\n",
-		      PFID(&pgs->hpk_fid), pgs->hpk_cookie,
-		      hsm_copytool_action2name(car->car_hai->hai_action),
-		      pgs->hpk_flags, pgs->hpk_errval,
-		      PFID(&car->car_hai->hai_fid),
-		      PFID(&car->car_hai->hai_dfid));
+	       " action=%s flags=%d err=%d fid="DFID"\n",
+	       PFID(&pgs->hpk_fid), pgs->hpk_cookie,
+	       hsm_copytool_action2name(action),
+	       pgs->hpk_flags, pgs->hpk_errval, PFID(&pgs->hpk_fid));
 
-	/* progress is done on FID or data FID depending of the action and
-	 * of the copy progress */
-	/* for restore progress is used to send back the data FID to cdt */
-	if (car->car_hai->hai_action == HSMA_RESTORE &&
-	    lu_fid_eq(&car->car_hai->hai_fid, &car->car_hai->hai_dfid))
-		car->car_hai->hai_dfid = pgs->hpk_fid;
+	if (pgs->hpk_flags & HP_FLAG_UPCALL) {
+		static const struct lu_fid fid_zero;
 
-	if ((car->car_hai->hai_action == HSMA_RESTORE ||
-	     car->car_hai->hai_action == HSMA_ARCHIVE) &&
-	    (!lu_fid_eq(&pgs->hpk_fid, &car->car_hai->hai_dfid) &&
-	     !lu_fid_eq(&pgs->hpk_fid, &car->car_hai->hai_fid))) {
-		CERROR("%s: Progress on "DFID" for cookie %#llx"
-		       " does not match request FID "DFID" nor data FID "
-		       DFID"\n",
-		       mdt_obd_name(mdt),
-		       PFID(&pgs->hpk_fid), pgs->hpk_cookie,
-		       PFID(&car->car_hai->hai_fid),
-		       PFID(&car->car_hai->hai_dfid));
-		GOTO(out, rc = -EINVAL);
+		action = (pgs->hpk_flags & HP_FLAG_ACTION_MASK) >>
+			 HP_FLAG_ACTION_SHIFT;
+		if (action != HSMA_ARCHIVE && action != HSMA_REMOVE) {
+			/* XXX */
+			GOTO(out, rc = -EPROTO);
+		}
+
+		fid = &pgs->hpk_fid;
+		dfid = &fid_zero;
+	} else {
+		car = mdt_cdt_update_request(cdt, pgs);
+		if (IS_ERR(car)) {
+			CERROR("%s: Cannot find running request for cookie %#llx"
+			       " on fid="DFID"\n",
+			       mdt_obd_name(mdt),
+			       pgs->hpk_cookie, PFID(&pgs->hpk_fid));
+
+			GOTO(out, rc = PTR_ERR(car));
+		}
+
+		action = car->car_hai->hai_action;
+
+		/* Progress is done on FID or data FID depending of
+		 * the action and of the copy progress. For restore
+		 * progress is used to send back the data FID to
+		 * cdt */
+		if (action == HSMA_RESTORE &&
+		    lu_fid_eq(&car->car_hai->hai_fid, &car->car_hai->hai_dfid))
+			car->car_hai->hai_dfid = pgs->hpk_fid;
+
+		if ((action == HSMA_RESTORE || action == HSMA_ARCHIVE) &&
+		    (!lu_fid_eq(&pgs->hpk_fid, &car->car_hai->hai_dfid) &&
+		     !lu_fid_eq(&pgs->hpk_fid, &car->car_hai->hai_fid))) {
+			CERROR("%s: Progress on "DFID" for cookie %#llx"
+			       " does not match request FID "DFID" "
+			       "nor data FID "DFID"\n",
+			       mdt_obd_name(mdt),
+			       PFID(&pgs->hpk_fid), pgs->hpk_cookie,
+			       PFID(&car->car_hai->hai_fid),
+			       PFID(&car->car_hai->hai_dfid));
+			GOTO(out, rc = -EINVAL);
+		}
+
+		fid = &car->car_hai->hai_fid;
+		dfid = &car->car_hai->hai_dfid;
 	}
 
 	if (pgs->hpk_errval != 0 && !(pgs->hpk_flags & HP_FLAG_COMPLETED)) {
@@ -1598,27 +1616,32 @@ int mdt_hsm_update_request_state(struct mdt_thread_info *mti,
 		       " (flags=%d))\n",
 		       mdt_obd_name(mdt),
 		       PFID(&pgs->hpk_fid), pgs->hpk_cookie,
-		       hsm_copytool_action2name(car->car_hai->hai_action),
+		       hsm_copytool_action2name(action),
 		       pgs->hpk_errval, pgs->hpk_flags);
 		GOTO(out, rc = -EINVAL);
 	}
 
 	/* now progress is valid */
-
-	/* we use a root like ucred */
-	hsm_init_ucred(mdt_ucred(mti));
-
 	if (pgs->hpk_flags & HP_FLAG_COMPLETED) {
 		enum agent_req_status status;
 		struct hsm_record_update update;
 		int rc1;
 
-		rc = hsm_cdt_request_completed(mti, pgs, car, &status);
+		/* We use a root like ucred to set HSM attributes on the object. */
+		hsm_init_ucred(mdt_ucred(mti));
+
+		rc = hsm_cdt_request_completed(mti, pgs, action, fid, dfid,
+					       &status);
+
+		/* If we're coming from the upcall then there is no
+		 * action log entry to update. */
+		if (pgs->hpk_flags & HP_FLAG_UPCALL)
+			GOTO(out, rc);
 
 		CDEBUG(D_HSM, "updating record: fid="DFID" cookie=%#llx action=%s "
 			      "status=%s\n",
 		       PFID(&pgs->hpk_fid), pgs->hpk_cookie,
-		       hsm_copytool_action2name(car->car_hai->hai_action),
+		       hsm_copytool_action2name(action),
 		       agent_req_status2name(status));
 
 		/* update record first (LU-9075) */
@@ -1646,14 +1669,14 @@ int mdt_hsm_update_request_state(struct mdt_thread_info *mti,
 		/* if copytool send a progress on a canceled request
 		 * we inform copytool it should stop
 		 */
-		if (car->car_canceled == 1)
+		if (!IS_ERR_OR_NULL(car) && car->car_canceled)
 			rc = -ECANCELED;
 	}
 	GOTO(out, rc);
 
 out:
-	/* remove ref got from mdt_cdt_update_request() */
-	mdt_cdt_put_request(car);
+	if (!IS_ERR_OR_NULL(car))
+		mdt_cdt_put_request(car);
 
 	return rc;
 }
@@ -2222,6 +2245,15 @@ mdt_hsm_other_request_mask_seq_show(struct seq_file *m, void *data)
 	return mdt_hsm_request_mask_show(m, cdt->cdt_other_request_mask);
 }
 
+static int
+mdt_hsm_upcall_mask_seq_show(struct seq_file *m, void *data)
+{
+	struct mdt_device *mdt = m->private;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+
+	return mdt_hsm_request_mask_show(m, cdt->cdt_upcall_mask);
+}
+
 static inline enum hsm_copytool_action
 hsm_copytool_name2action(const char *name)
 {
@@ -2321,6 +2353,67 @@ mdt_hsm_other_request_mask_seq_write(struct file *file, const char __user *buf,
 					   &cdt->cdt_other_request_mask);
 }
 
+static ssize_t
+mdt_hsm_upcall_mask_seq_write(struct file *file, const char __user *buf,
+			      size_t count, loff_t *off)
+{
+	struct seq_file *m = file->private_data;
+	struct mdt_device *mdt = m->private;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	u64 mask = 0;
+	ssize_t rc;
+
+	rc = mdt_write_hsm_request_mask(file, buf, count, &mask);
+	if (rc <= 0)
+		return rc;
+
+	if (mask & ~((1ULL << HSMA_ARCHIVE)|(1ULL << HSMA_REMOVE)))
+		return -EINVAL;
+
+	cdt->cdt_upcall_mask = mask;
+
+	return rc;
+}
+
+static ssize_t
+mdt_hsm_upcall_path_seq_write(struct file *file, const char __user *buf,
+			      size_t count, loff_t *off)
+{
+	struct seq_file *m = file->private_data;
+	struct mdt_device *mdt = m->private;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	char *kbuf;
+	ssize_t rc;
+
+	if (count >= sizeof(cdt->cdt_upcall_path))
+		return -EINVAL;
+
+	OBD_ALLOC(kbuf, count + 1);
+	if (kbuf == NULL)
+		return -ENOMEM;
+
+	if (copy_from_user(kbuf, buf, count))
+		GOTO(out_kbuf, rc = -EFAULT);
+
+	kbuf[count] = '\0';
+	strlcpy(cdt->cdt_upcall_path, kbuf, sizeof(cdt->cdt_upcall_path));
+	rc = count;
+out_kbuf:
+	OBD_FREE(kbuf, count + 1);
+
+	return rc;
+}
+
+static int mdt_hsm_upcall_path_seq_show(struct seq_file *m, void *data)
+{
+	struct mdt_device *mdt = m->private;
+	struct coordinator *cdt = &mdt->mdt_coordinator;
+	ENTRY;
+
+	seq_printf(m, "%s\n", cdt->cdt_upcall_path);
+	RETURN(0);
+}
+
 static int mdt_hsm_cdt_raolu_seq_show(struct seq_file *m, void *data)
 {
 	struct mdt_device *mdt = m->private;
@@ -2359,6 +2452,8 @@ LPROC_SEQ_FOPS(mdt_hsm_cdt_default_archive_id);
 LPROC_SEQ_FOPS(mdt_hsm_user_request_mask);
 LPROC_SEQ_FOPS(mdt_hsm_group_request_mask);
 LPROC_SEQ_FOPS(mdt_hsm_other_request_mask);
+LPROC_SEQ_FOPS(mdt_hsm_upcall_mask);
+LPROC_SEQ_FOPS(mdt_hsm_upcall_path);
 LPROC_SEQ_FOPS(mdt_hsm_cdt_raolu);
 
 /* Read-only proc files for request counters */
@@ -2430,5 +2525,9 @@ static struct lprocfs_vars lprocfs_mdt_hsm_vars[] = {
 	  .fops	=	&mdt_hsm_cdt_restore_count_fops,	},
 	{ .name	=	"remove_count",
 	  .fops	=	&mdt_hsm_cdt_remove_count_fops,		},
+	{ .name	=	"upcall_mask",
+	  .fops	=	&mdt_hsm_upcall_mask_fops,		},
+	{ .name	=	"upcall_path",
+	  .fops	=	&mdt_hsm_upcall_path_fops,		},
 	{ 0 }
 };

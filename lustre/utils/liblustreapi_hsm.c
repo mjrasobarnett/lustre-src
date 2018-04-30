@@ -968,7 +968,7 @@ static int fid_parent(const char *mnt, const struct lu_fid *fid, char *parent,
 	return rc;
 }
 
-static int ct_open_by_fid(const struct hsm_copytool_private *ct,
+static int ct_open_by_fid(int open_by_fid_fd,
 			  const struct lu_fid *fid, int open_flags)
 {
 	char fid_name[FID_NOBRACE_LEN + 1];
@@ -976,7 +976,7 @@ static int ct_open_by_fid(const struct hsm_copytool_private *ct,
 
 	snprintf(fid_name, sizeof(fid_name), DFID_NOBRACE, PFID(fid));
 
-	fd = openat(ct->open_by_fid_fd, fid_name, open_flags);
+	fd = openat(open_by_fid_fd, fid_name, open_flags);
 	return fd < 0 ? -errno : fd;
 }
 
@@ -1116,7 +1116,8 @@ int llapi_hsm_action_begin(struct hsm_copyaction_private **phcp,
 		goto ok_out;
 
 	if (hai->hai_action == HSMA_ARCHIVE) {
-		fd = ct_open_by_fid(hcp->ct_priv, &hai->hai_dfid,
+		fd = ct_open_by_fid(hcp->ct_priv->open_by_fid_fd,
+				    &hai->hai_dfid,
 				O_RDONLY | O_NOATIME | O_NOFOLLOW | O_NONBLOCK);
 		if (fd < 0) {
 			rc = fd;
@@ -1573,3 +1574,139 @@ int llapi_hsm_request(const char *path, const struct hsm_user_request *request)
 	return rc;
 }
 
+struct llapi_hsm_upcall_private {
+	int hup_mnt_fd;
+	int hup_open_by_fid_fd;
+};
+
+void llapi_hsm_upcall_fini(struct llapi_hsm_upcall_private **phup)
+{
+	struct llapi_hsm_upcall_private *hup = *phup;
+
+	*phup = NULL;
+
+	if (hup == NULL)
+		return;
+
+	if (!(hup->hup_mnt_fd < 0))
+		close(hup->hup_mnt_fd);
+
+	if (!(hup->hup_open_by_fid_fd < 0))
+		close(hup->hup_open_by_fid_fd);
+
+	free(hup);
+}
+
+int llapi_hsm_upcall_init(struct llapi_hsm_upcall_private **phup,
+			  const char *mount)
+{
+	struct llapi_hsm_upcall_private *hup;
+	int rc = 0;
+
+	hup = calloc(1, sizeof(*hup));
+	if (hup == NULL)
+		return -errno;
+
+	hup->hup_mnt_fd = -1;
+	hup->hup_open_by_fid_fd = -1;
+
+	hup->hup_mnt_fd = open(mount, O_RDONLY);
+	if (hup->hup_mnt_fd < 0) {
+		rc = -errno;
+		goto out;
+	}
+
+	hup->hup_open_by_fid_fd = openat(hup->hup_mnt_fd, OPEN_BY_FID_PATH,
+					 O_RDONLY);
+	if (hup->hup_open_by_fid_fd < 0) {
+		rc = -errno;
+		goto out;
+	}
+
+out:
+	if (rc < 0)
+		llapi_hsm_upcall_fini(&hup);
+
+	*phup = hup;
+
+	return rc;
+}
+
+/* The date version returned in *data_version should be passed to
+ * llapi_hsm_upcall_end().
+ *
+ * For archive we return an open file descriptor on the Lustre file to
+ * be archived. The caller should close it. */
+int llapi_hsm_upcall_action_begin(struct llapi_hsm_upcall_private *hup,
+				  enum hsm_copytool_action action,
+				  __u32 archive_id,
+				  __u16 flags,
+				  const struct lu_fid *fid,
+				  __u64 *data_version)
+{
+	struct hsm_copy hc = {
+		.hc_hai.hai_action = action,
+		.hc_hai.hai_fid = *fid,
+		.hc_flags = (flags & ~HP_FLAG_ACTION_MASK) |
+			    HP_FLAG_UPCALL |
+			    (action << HP_FLAG_ACTION_SHIFT),
+		.hc_archive_id = archive_id,
+	};
+	int fd = -1;
+	int rc;
+
+	if (action == HSMA_ARCHIVE) {
+		fd = ct_open_by_fid(hup->hup_open_by_fid_fd, fid,
+				O_RDONLY | O_NOATIME | O_NOFOLLOW | O_NONBLOCK);
+		if (fd < 0) {
+			rc = fd;
+			goto out;
+		}
+	} else if (action == HSMA_REMOVE) {
+		/* Since remove is atomic there is no need to send an
+		 * initial MDS_HSM_PROGRESS RPC. */
+		rc = 0;
+		goto out;
+	} else {
+		rc = -EINVAL;
+		goto out;
+	}
+
+	rc = ioctl(hup->hup_mnt_fd, LL_IOC_HSM_COPY_START, &hc);
+	if (rc < 0) {
+		rc = -errno;
+		goto out;
+	}
+
+	if (action == HSMA_ARCHIVE)
+		*data_version = hc.hc_data_version;
+
+out:
+	if (rc < 0 && !(fd < 0))
+		close(fd);
+
+	return rc < 0 ? rc : (action == HSMA_ARCHIVE ? fd : 0);
+}
+
+int llapi_hsm_upcall_action_end(struct llapi_hsm_upcall_private *hup,
+				enum hsm_copytool_action action,
+				__u32 archive_id,
+				__u16 flags,
+				const struct lu_fid *fid,
+				__u64 start_data_version,
+				int wrc)
+{
+	struct hsm_copy hc = {
+		.hc_hai.hai_action = action,
+		.hc_hai.hai_fid = *fid,
+		.hc_flags = (flags & ~HP_FLAG_ACTION_MASK) |
+			    HP_FLAG_COMPLETED |
+			    HP_FLAG_UPCALL |
+			    (action << HP_FLAG_ACTION_SHIFT),
+		.hc_archive_id = archive_id,
+		.hc_data_version = start_data_version,
+		.hc_errval = abs(wrc),
+	};
+
+	return ioctl(hup->hup_mnt_fd, LL_IOC_HSM_COPY_END, &hc);
+}

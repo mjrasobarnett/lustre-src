@@ -1941,9 +1941,20 @@ struct hsm_user_import {
 	__u32		hui_archive_id;
 };
 
-/* Copytool progress reporting */
-#define HP_FLAG_COMPLETED 0x01
-#define HP_FLAG_RETRY     0x02
+/* Copytool progress reporting. Used in struct hsm_progress member
+ * hp_flags, struct hsm_copy member hp_flags, and struct
+ * hsm_progress_kernel member hpk_flags. All are __u16. If
+ * HP_FLAG_UPCALL is set then the action is encoded using HSMA values
+ * in the top five bits. */
+enum hsm_progress_flag {
+	HP_FLAG_COMPLETED	= 0x0001,
+	HP_FLAG_RETRY		= 0x0002,
+	HP_FLAG_UPCALL		= 0x0004,
+	HP_FLAG_ACTION_SHIFT	= 11,
+	HP_FLAG_ARCHIVE		= HSMA_ARCHIVE << HP_FLAG_ACTION_SHIFT,
+	HP_FLAG_REMOVE		= HSMA_REMOVE << HP_FLAG_ACTION_SHIFT,
+	HP_FLAG_ACTION_MASK	= 0xf800, /* 0x1f << .. _SHIFT */
+};
 
 struct hsm_progress {
 	struct lu_fid		hp_fid;
@@ -1958,7 +1969,7 @@ struct hsm_copy {
 	__u64			hc_data_version;
 	__u16			hc_flags;
 	__u16			hc_errval; /* positive val */
-	__u32			padding;
+	__u32			hc_archive_id; /* When HP_FLAG_UPCALL is set. */
 	struct hsm_action_item	hc_hai;
 };
 

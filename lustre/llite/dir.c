@@ -807,10 +807,10 @@ static int ll_ioc_copy_start(struct super_block *sb, struct hsm_copy *copy)
 	hpk.hpk_cookie = copy->hc_hai.hai_cookie;
 	hpk.hpk_extent.offset = copy->hc_hai.hai_extent.offset;
 	hpk.hpk_extent.length = 0;
-	hpk.hpk_flags = 0;
+	hpk.hpk_flags = copy->hc_flags;
 	hpk.hpk_errval = 0;
+	hpk.hpk_archive_id = copy->hc_archive_id;
 	hpk.hpk_data_version = 0;
-
 
 	/* For archive request, we need to read the current file version. */
 	if (copy->hc_hai.hai_action == HSMA_ARCHIVE) {
@@ -892,6 +892,7 @@ static int ll_ioc_copy_end(struct super_block *sb, struct hsm_copy *copy)
 	hpk.hpk_extent = copy->hc_hai.hai_extent;
 	hpk.hpk_flags = copy->hc_flags | HP_FLAG_COMPLETED;
 	hpk.hpk_errval = copy->hc_errval;
+	hpk.hpk_archive_id = copy->hc_archive_id;
 	hpk.hpk_data_version = 0;
 
 	/* For archive request, we need to check the file data was not changed.
