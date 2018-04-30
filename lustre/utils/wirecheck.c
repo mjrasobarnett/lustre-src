@@ -2178,7 +2178,7 @@ check_hsm_progress_kernel(void)
 	CHECK_MEMBER(hsm_progress_kernel, hpk_extent);
 	CHECK_MEMBER(hsm_progress_kernel, hpk_flags);
 	CHECK_MEMBER(hsm_progress_kernel, hpk_errval);
-	CHECK_MEMBER(hsm_progress_kernel, hpk_padding1);
+	CHECK_MEMBER(hsm_progress_kernel, hpk_archive_id);
 	CHECK_MEMBER(hsm_progress_kernel, hpk_data_version);
 	CHECK_MEMBER(hsm_progress_kernel, hpk_padding2);
 }
@@ -2196,6 +2196,9 @@ check_hsm_progress(void)
 	CHECK_MEMBER(hsm_progress, padding);
 	CHECK_DEFINE_X(HP_FLAG_COMPLETED);
 	CHECK_DEFINE_X(HP_FLAG_RETRY);
+	CHECK_DEFINE_X(HP_FLAG_UPCALL);
+	CHECK_DEFINE_X(HP_FLAG_ARCHIVE);
+	CHECK_DEFINE_X(HP_FLAG_REMOVE);
 }
 
 static void
@@ -2205,7 +2208,7 @@ check_hsm_copy(void)
 	CHECK_MEMBER(hsm_copy, hc_data_version);
 	CHECK_MEMBER(hsm_copy, hc_flags);
 	CHECK_MEMBER(hsm_copy, hc_errval);
-	CHECK_MEMBER(hsm_copy, padding);
+	CHECK_MEMBER(hsm_copy, hc_archive_id);
 	CHECK_MEMBER(hsm_copy, hc_hai);
 }
 

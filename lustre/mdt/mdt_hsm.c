@@ -533,6 +533,12 @@ int mdt_hsm_request(struct tgt_session_info *tsi)
 		GOTO(out_ucred, rc = -EINVAL);
 	}
 
+	/* 0 means accepted by the upcall. 1 means this request should
+	 * use the normal path. */
+	rc = mdt_hsm_upcall(info, action, hr, hui, data);
+	if (rc <= 0)
+		GOTO(out_ucred, rc);
+
 	hal_size = sizeof(*hal) + cfs_size_round(MTI_NAME_MAXLEN) /* fsname */ +
 		   (sizeof(*hai) + cfs_size_round(hr->hr_data_len)) *
 		   hr->hr_itemcount;

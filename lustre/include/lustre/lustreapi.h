@@ -395,6 +395,24 @@ int llapi_hsm_unregister_event_fifo(const char *path);
 void llapi_hsm_log_error(enum llapi_message_level level, int _rc,
 			 const char *fmt, va_list args);
 
+struct llapi_hsm_upcall_private;
+int llapi_hsm_upcall_init(struct llapi_hsm_upcall_private **phup,
+			  const char *mount);
+void llapi_hsm_upcall_fini(struct llapi_hsm_upcall_private **phup);
+int llapi_hsm_upcall_action_begin(struct llapi_hsm_upcall_private *hup,
+				  enum hsm_copytool_action action,
+				  __u32 archive_id,
+				  __u16 flags,
+				  const struct lu_fid *fid,
+				  __u64 *data_version);
+int llapi_hsm_upcall_action_end(struct llapi_hsm_upcall_private *hup,
+				enum hsm_copytool_action action,
+				__u32 archive_id,
+				__u16 flags,
+				const struct lu_fid *fid,
+				__u64 data_version,
+				int wrc);
+
 int llapi_get_agent_uuid(char *path, char *buf, size_t bufsize);
 int llapi_create_volatile_idx(char *directory, int idx, int mode);
 

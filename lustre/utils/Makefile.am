@@ -25,8 +25,9 @@ endif
 rootsbin_PROGRAMS = mount.lustre
 bin_SCRIPTS   = llstat llobdstat plot-llstat
 bin_PROGRAMS  = lfs
-sbin_SCRIPTS  = ldlm_debug_upcall
-sbin_PROGRAMS = lctl l_getidentity llverfs lustre_rsync ll_decode_linkea
+sbin_SCRIPTS  = ldlm_debug_upcall lhsm_worker_posix lhsm_mdt_upcall
+sbin_PROGRAMS = lctl l_getidentity llverfs lustre_rsync ll_decode_linkea \
+		llsom_sync
 
 if TESTS
 sbin_PROGRAMS += wiretest
@@ -58,7 +59,7 @@ endif
 lctl_LDADD :=  liblustreapi.la $(PTHREAD_LIBS)
 lctl_DEPENDENCIES := liblustreapi.la
 
-lfs_SOURCES = lfs.c lfs_project.c lfs_project.h
+lfs_SOURCES = lfs.c lfs_project.c lfs_project.h callvpe.c callvpe.h
 lfs_LDADD := liblustreapi.la -lz
 lfs_LDADD += $(top_builddir)/lnet/utils/lnetconfig/liblnetconfig.la
 lfs_DEPENDENCIES := liblustreapi.la
@@ -208,7 +209,8 @@ wiretest_SOURCES = wiretest.c
 
 endif # UTILS
 
-EXTRA_DIST = llstat llobdstat plot-llstat ldlm_debug_upcall liblustreapi.map
+EXTRA_DIST = llstat llobdstat plot-llstat ldlm_debug_upcall liblustreapi.map \
+	     lhsm_worker_posix lhsm_mdt_upcall
 
 # NOTE: this should only be run on i386.
 newwiretest: wirehdr.c wirecheck

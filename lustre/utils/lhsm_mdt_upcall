@@ -1,0 +1,26 @@
+#!/bin/bash
+
+# Invocation /.../lhsm_mdt_upcall ACTION FSNAME ARCHIVE_ID FLAGS DATA FID...
+#
+# Trivial lhsm_mdt_upcall script that appends actions to
+# /tmp/hsm_upcall_actions
+
+export HOME=/root
+export PATH=/bin:/usr/bin:/sbin:/usr/sbin
+export USER=root
+
+exec < /dev/null >> /tmp/hsm_upcall_actions 2>> /tmp/hsm_upcall_errors
+
+main() {
+	local action="$1"
+	local fsname="$2"
+	local archive_id="$3"
+	local flags="$4"
+	local data="$5"
+
+	for ((i = 6; i <= $#; i++)); do
+		echo $action $fsname $archive_id $flags "'$data'" "${!i}"
+	done
+}
+
+main "$@"

@@ -462,7 +462,6 @@ echo '%{_sbindir}/wiretest' >>lustre-tests.files
 %{_bindir}/llobdstat
 %{_bindir}/llstat
 %{_bindir}/plot-llstat
-
 %{_bindir}/lfs
 %{_bindir}/lfs_migrate
 /sbin/mount.lustre
