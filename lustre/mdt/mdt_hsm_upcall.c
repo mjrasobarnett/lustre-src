@@ -114,7 +114,6 @@ int mdt_hsm_upcall(struct mdt_thread_info *mti,
 	  CERROR("DEBUG: 9.1 (%d) - argv[6+i]: %s \n", i, argv[6+i]);
 	  CERROR("DEBUG: 9.3 (%d) - FID_LEN: %d \n", i, FID_LEN);
 	  CERROR("DEBUG: 9.4 (%d) - DFID: %s \n", i, DFID);
-	  CERROR("DEBUG: 9.5 (%d) - hui[i]: %s \n", i, hui[i]);
 		snprintf(argv[6 + i], FID_LEN + 1, DFID,
 			 PFID(&hui[i].hui_fid));
 	  CERROR("DEBUG: 10 (%d)\n", i);
