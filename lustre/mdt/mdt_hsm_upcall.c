@@ -104,11 +104,18 @@ int mdt_hsm_upcall(struct mdt_thread_info *mti,
 	for (i = 0; i < count; i++) {
 	  CERROR("DEBUG: 8 (%d)\n", i);
 		OBD_ALLOC(argv[6 + i], FID_LEN + 1);
+	  CERROR("DEBUG: 8.1 (%d)\n", i);
 		if (argv[6 + i] == NULL)
+	    CERROR("DEBUG: 8.2 (%d)\n", i);
 			GOTO(out_argv, rc = -ENOMEM);
 
 	  CERROR("DEBUG: 9 (%d)\n", i);
-		snprintf(argv[6 + 1], FID_LEN + 1, DFID,
+	  CERROR("DEBUG: 9.0 (%d) - count: %d \n", i, count);
+	  CERROR("DEBUG: 9.1 (%d) - argv[6+i]: %s \n", i, argv[6+i]);
+	  CERROR("DEBUG: 9.3 (%d) - FID_LEN: %d \n", i, FID_LEN);
+	  CERROR("DEBUG: 9.4 (%d) - DFID: %s \n", i, DFID);
+	  CERROR("DEBUG: 9.5 (%d) - hui[i]: %s \n", i, hui[i]);
+		snprintf(argv[6 + i], FID_LEN + 1, DFID,
 			 PFID(&hui[i].hui_fid));
 	  CERROR("DEBUG: 10 (%d)\n", i);
 	}
@@ -122,12 +129,13 @@ int mdt_hsm_upcall(struct mdt_thread_info *mti,
 	}
 
 out_argv:
+	CERROR("DEBUG: 12.1\n");
 	for (i = 0; i < count; i++) {
 		if (argv[6 + i] != NULL)
 			OBD_FREE(argv[6 + i], FID_LEN + 1);
 	}
 
-	CERROR("DEBUG: 12\n");
+	CERROR("DEBUG: 12.2\n");
 	OBD_FREE(argv, (6 + count) * sizeof(argv[0]));
 out:
 	CERROR("DEBUG: 13\n");
