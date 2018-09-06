@@ -36,7 +36,6 @@ int mdt_hsm_upcall(struct mdt_thread_info *mti,
                    const struct hsm_user_item *hui,
                    const void *data)
 {
-	CERROR("DEBUG: ENTER mdt_hsm_upcall\n");
 	struct mdt_device *mdt = mti->mti_mdt;
         struct coordinator *cdt = &mdt->mdt_coordinator;
 	u64 archive_id = hr->hr_archive_id != 0 ?
