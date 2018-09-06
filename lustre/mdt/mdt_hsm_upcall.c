@@ -36,6 +36,7 @@ int mdt_hsm_upcall(struct mdt_thread_info *mti,
                    const struct hsm_user_item *hui,
                    const void *data)
 {
+	CERROR("DEBUG: ENTER mdt_hsm_upcall");
 	struct mdt_device *mdt = mti->mti_mdt;
         struct coordinator *cdt = &mdt->mdt_coordinator;
 	u64 archive_id = hr->hr_archive_id != 0 ?
@@ -49,6 +50,7 @@ int mdt_hsm_upcall(struct mdt_thread_info *mti,
 	unsigned int i;
 	int rc;
 	ENTRY;
+	CERROR("DEBUG: 1");
 
 	/* If action is not in the upcall mask or the upcall path has
 	 * not been set then return +1 to reject the request and it
@@ -79,32 +81,42 @@ int mdt_hsm_upcall(struct mdt_thread_info *mti,
 	if (archive_id == 0)
 		archive_id = cdt->cdt_default_archive_id;
 
+	CERROR("DEBUG: 2");
 	obd_uuid2fsname(fsname, mdt_obd_name(mdt), sizeof(fsname));
+	CERROR("DEBUG: 3");
 	snprintf(archive_id_arg, sizeof(archive_id_arg), "%llu", archive_id);
+	CERROR("DEBUG: 4");
 	snprintf(flags_arg, sizeof(flags_arg), "%llu", flags);
+	CERROR("DEBUG: 5");
 
 	OBD_ALLOC(argv, (6 + count) * sizeof(argv[0]));
 	if (argv == NULL)
 		GOTO(out, rc = -ENOMEM);
 
+	CERROR("DEBUG: 6");
 	argv[0] = cdt->cdt_upcall_path;
 	argv[1] = (char *)hsm_copytool_action2name(action);
 	argv[2] = fsname;
 	argv[3] = archive_id_arg;
 	argv[4] = flags_arg;
 	argv[5] = (char *)data;
+	CERROR("DEBUG: 7");
 
 	for (i = 0; i < count; i++) {
+	  CERROR("DEBUG: 8 (%s)", i);
 		OBD_ALLOC(argv[6 + i], FID_LEN + 1);
 		if (argv[6 + i] == NULL)
 			GOTO(out_argv, rc = -ENOMEM);
 
+	  CERROR("DEBUG: 9 (%s)", i);
 		snprintf(argv[6 + 1], FID_LEN + 1, DFID,
 			 PFID(&hui[i].hui_fid));
+	  CERROR("DEBUG: 10 (%s)", i);
 	}
 
 	rc = call_usermodehelper(cdt->cdt_upcall_path, argv, NULL /* env */,
 				 UMH_WAIT_PROC);
+	CERROR("DEBUG: 11");
 	if (rc != 0) {
 		CERROR("%s: HSM upcall '%s' failed: rc = %d\n",
 		       mdt_obd_name(mdt), cdt->cdt_upcall_path, rc);
@@ -116,7 +128,9 @@ out_argv:
 			OBD_FREE(argv[6 + i], FID_LEN + 1);
 	}
 
+	CERROR("DEBUG: 12");
 	OBD_FREE(argv, (6 + count) * sizeof(argv[0]));
 out:
+	CERROR("DEBUG: 13");
 	RETURN(rc);
 }
