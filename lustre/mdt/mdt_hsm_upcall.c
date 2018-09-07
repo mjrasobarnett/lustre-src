@@ -50,6 +50,8 @@ int mdt_hsm_upcall(struct mdt_thread_info *mti,
 	int rc;
 	ENTRY;
 	CERROR("DEBUG: 1\n");
+	CERROR("DEBUG: 1.1 - count: %d \n", count);
+	CERROR("DEBUG: 1.2 - FID_LEN: %d \n", FID_LEN);
 
 	/* If action is not in the upcall mask or the upcall path has
 	 * not been set then return +1 to reject the request and it
@@ -110,9 +112,7 @@ int mdt_hsm_upcall(struct mdt_thread_info *mti,
 			GOTO(out_argv, rc = -ENOMEM);
 
 	  CERROR("DEBUG: 9 (%d)\n", i);
-	  CERROR("DEBUG: 9.0 (%d) - count: %d \n", i, count);
 	  CERROR("DEBUG: 9.1 (%d) - argv[6+i]: %s \n", i, argv[6+i]);
-	  CERROR("DEBUG: 9.3 (%d) - FID_LEN: %d \n", i, FID_LEN);
 	  CERROR("DEBUG: 9.4 (%d) - DFID: %s \n", i, DFID);
 		snprintf(argv[6 + i], FID_LEN + 1, DFID,
 			 PFID(&hui[i].hui_fid));
