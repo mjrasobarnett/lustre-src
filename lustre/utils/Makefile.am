@@ -26,8 +26,7 @@ rootsbin_PROGRAMS = mount.lustre
 bin_SCRIPTS   = llstat llobdstat plot-llstat
 bin_PROGRAMS  = lfs
 sbin_SCRIPTS  = ldlm_debug_upcall lhsm_worker_posix lhsm_mdt_upcall
-sbin_PROGRAMS = lctl l_getidentity llverfs lustre_rsync ll_decode_linkea \
-		llsom_sync
+sbin_PROGRAMS = lctl l_getidentity llverfs lustre_rsync ll_decode_linkea
 
 if TESTS
 sbin_PROGRAMS += wiretest
