@@ -343,6 +343,8 @@ static inline struct ll_inode_info *ll_i2info(struct inode *inode)
 	return container_of(inode, struct ll_inode_info, lli_vfs_inode);
 }
 
+/* default to use at least 16M for fast read if possible */
+#define READAHEAD_FAST_READ_MIN			MiB_TO_PAGES(16UL)
 /* default to about 64M of readahead on a given system. */
 #define SBI_DEFAULT_READAHEAD_MAX		MiB_TO_PAGES(64UL)
 
