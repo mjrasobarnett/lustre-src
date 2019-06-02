@@ -891,13 +891,15 @@ static int mdt_object_open_lock(struct mdt_thread_info *info,
 
 			lhc = &info->mti_lh[MDT_LH_LOCAL];
 		} else if (dom_lock) {
-			lm = (open_flags & MDS_FMODE_WRITE) ? LCK_PW : LCK_PR;
 			if (info->mti_mdt->mdt_opts.mo_dom_lock ==
 			    TRYLOCK_DOM_ON_OPEN) {
+				lm = LCK_PR;
 				trybits |= MDS_INODELOCK_DOM |
 					   MDS_INODELOCK_LAYOUT;
 			} else {
 				/* mo_dom_lock == ALWAYS_DOM_LOCK_ON_OPEN */
+				lm = open_flags & MDS_FMODE_WRITE ? LCK_PW :
+								    LCK_PR;
 				*ibits = MDS_INODELOCK_DOM;
 				if (info->mti_mdt->mdt_opts.mo_dom_read_open) {
 					trybits |= MDS_INODELOCK_LAYOUT;
