@@ -894,6 +894,8 @@ kiblnd_create_conn(struct kib_peer_ni *peer_ni, struct rdma_cm_id *cmid,
 
 	init_qp_attr->event_handler = kiblnd_qp_event;
 	init_qp_attr->qp_context = conn;
+	init_qp_attr->cap.max_send_wr = IBLND_SEND_WRS(conn);
+	init_qp_attr->cap.max_recv_wr = IBLND_RECV_WRS(conn);
 	init_qp_attr->cap.max_send_sge = *kiblnd_tunables.kib_wrq_sge;
 	init_qp_attr->cap.max_recv_sge = 1;
 	init_qp_attr->sq_sig_type = IB_SIGNAL_REQ_WR;
@@ -904,14 +906,11 @@ kiblnd_create_conn(struct kib_peer_ni *peer_ni, struct rdma_cm_id *cmid,
 	conn->ibc_sched = sched;
 
 	do {
-		init_qp_attr->cap.max_send_wr = kiblnd_send_wrs(conn);
-		init_qp_attr->cap.max_recv_wr = IBLND_RECV_WRS(conn);
-
 		rc = rdma_create_qp(cmid, conn->ibc_hdev->ibh_pd, init_qp_attr);
-		if (!rc || conn->ibc_queue_depth < 2)
+		if (!rc || init_qp_attr->cap.max_send_wr < 16)
 			break;
 
-		conn->ibc_queue_depth--;
+		init_qp_attr->cap.max_send_wr -= init_qp_attr->cap.max_send_wr / 4;
 	} while (rc);
 
 	if (rc) {
@@ -924,12 +923,9 @@ kiblnd_create_conn(struct kib_peer_ni *peer_ni, struct rdma_cm_id *cmid,
 		goto failed_2;
 	}
 
-	if (conn->ibc_queue_depth != peer_ni->ibp_queue_depth)
-		CWARN("peer %s - queue depth reduced from %u to %u"
-		      "  to allow for qp creation\n",
-		      libcfs_nid2str(peer_ni->ibp_nid),
-		      peer_ni->ibp_queue_depth,
-		      conn->ibc_queue_depth);
+	if (init_qp_attr->cap.max_send_wr != IBLND_SEND_WRS(conn))
+		CDEBUG(D_NET, "original send wr %d, created with %d\n",
+			IBLND_SEND_WRS(conn), init_qp_attr->cap.max_send_wr);
 
 	LIBCFS_CPT_ALLOC(conn->ibc_rxs, lnet_cpt_table(), cpt,
 			 IBLND_RX_MSGS(conn) * sizeof(struct kib_rx));
