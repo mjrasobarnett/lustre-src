@@ -351,7 +351,7 @@ ll_read_ahead_pages(const struct lu_env *env, struct cl_io *io,
 	LASSERT(ria != NULL);
 	RIA_DEBUG(ria);
 
-	stride_ria = ria->ria_length > ria->ria_pages && ria->ria_pages > 0;
+	stride_ria = false;
 	for (page_idx = ria->ria_start;
 	     page_idx <= ria->ria_end && ria->ria_reserved > 0; page_idx++) {
 		if (ras_inside_ra_window(page_idx, ria)) {
