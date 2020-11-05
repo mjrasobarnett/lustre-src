@@ -276,6 +276,8 @@ int __mdd_permission_internal(const struct lu_env *env, struct mdd_object *obj,
 	LASSERT(la != NULL);
 
 	mode = la->la_mode;
+	CDEBUG(D_SEC, "Checking access: mode %x, fsuid %u, uid %u\n",
+	       la->la_mode, uc->uc_fsuid, la->la_uid);
 	if (uc->uc_fsuid == la->la_uid) {
 		mode >>= 6;
         } else {
