@@ -91,6 +91,7 @@ __mdd_lookup(const struct lu_env *env, struct md_object *pobj,
 		       mdd2obd_dev(m)->obd_name, PFID(mdo2fid(mdd_obj)));
 	}
 
+  CDEBUG(D_SEC, "calling mdd_permission_internal_locked for %s\n", name);
 	rc = mdd_permission_internal_locked(env, mdd_obj, pattr, mask,
 					    MOR_TGT_PARENT);
 	if (rc)
