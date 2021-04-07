@@ -2570,6 +2570,245 @@ test_27M() {
 }
 run_test 27M "test O_APPEND striping"
 
+test_27N() {
+	combined_mgs_mds && skip "needs separate MGS/MDT"
+
+	pool_add $TESTNAME || error "pool_add failed"
+	do_facet mgs "$LCTL pool_list $FSNAME" |
+		grep -Fx "${FSNAME}.${TESTNAME}" ||
+		error "lctl pool_list on MGS failed"
+}
+run_test 27N "lctl pool_list on separate MGS gives correct pool name"
+
+clean_foreign_symlink() {
+	trap 0
+	lctl set_param llite/$FSNAME-*/foreign_symlink_enable=0
+	for i in $DIR/$tdir/* ; do
+		$LFS unlink_foreign $i || true
+	done
+}
+
+test_27O() {
+	[[ $(lustre_version_code $SINGLEMDS) -le $(version_code 2.12.51) ]] &&
+		skip "Need MDS version newer than 2.12.51"
+
+	test_mkdir $DIR/$tdir
+	local uuid1=$(cat /proc/sys/kernel/random/uuid)
+	local uuid2=$(cat /proc/sys/kernel/random/uuid)
+
+	trap clean_foreign_symlink EXIT
+
+	# enable foreign_symlink behaviour
+	$LCTL set_param llite/$FSNAME-*/foreign_symlink_enable=1
+
+	# foreign symlink LOV format is a partial path by default
+
+	# create foreign file (lfs + API)
+	$LFS setstripe --foreign=symlink --flags 0xda05 \
+		-x "${uuid1}/${uuid2}" --mode 0600 $DIR/$tdir/${tfile} ||
+		error "$DIR/$tdir/${tfile}: create failed"
+
+	$LFS getstripe -v $DIR/$tdir/${tfile} |
+		grep "lfm_magic:.*0x0BD70BD0" ||
+		error "$DIR/$tdir/${tfile}: invalid LOV EA foreign magic"
+	$LFS getstripe -v $DIR/$tdir/${tfile} | grep "lfm_type:.*symlink" ||
+		error "$DIR/$tdir/${tfile}: invalid LOV EA foreign type"
+	$LFS getstripe -v $DIR/$tdir/${tfile} |
+		grep "lfm_flags:.*0x0000DA05" ||
+		error "$DIR/$tdir/${tfile}: invalid LOV EA foreign flags"
+	$LFS getstripe $DIR/$tdir/${tfile} |
+		grep "lfm_value:.*${uuid1}/${uuid2}" ||
+		error "$DIR/$tdir/${tfile}: invalid LOV EA foreign value"
+
+	# modify striping should fail
+	$LFS setstripe -c 2 $DIR/$tdir/$tfile &&
+		error "$DIR/$tdir/$tfile: setstripe should fail"
+
+	# R/W should fail ("/{foreign_symlink_prefix}/${uuid1}/" missing)
+	cat $DIR/$tdir/$tfile && error "$DIR/$tdir/$tfile: read should fail"
+	cat /etc/passwd > $DIR/$tdir/$tfile &&
+		error "$DIR/$tdir/$tfile: write should fail"
+
+	# rename should succeed
+	mv $DIR/$tdir/$tfile $DIR/$tdir/${tfile}.new ||
+		error "$DIR/$tdir/$tfile: rename has failed"
+
+	#remove foreign_symlink file should fail
+	rm $DIR/$tdir/${tfile}.new &&
+		error "$DIR/$tdir/${tfile}.new: remove of foreign_symlink file should fail"
+
+	#test fake symlink
+	mkdir /tmp/${uuid1} ||
+		error "/tmp/${uuid1}: mkdir has failed"
+	echo FOOFOO > /tmp/${uuid1}/${uuid2} ||
+		error "/tmp/${uuid1}/${uuid2}: echo has failed"
+	$LCTL set_param llite/$FSNAME-*/foreign_symlink_prefix=/tmp/
+	$CHECKSTAT -t link -l /tmp/${uuid1}/${uuid2} $DIR/$tdir/${tfile}.new ||
+		error "$DIR/$tdir/${tfile}.new: not seen as a symlink"
+	#read should succeed now
+	cat $DIR/$tdir/${tfile}.new | grep FOOFOO ||
+		error "$DIR/$tdir/${tfile}.new: symlink resolution has failed"
+	#write should succeed now
+	cat /etc/passwd > $DIR/$tdir/${tfile}.new ||
+		error "$DIR/$tdir/${tfile}.new: write should succeed"
+	diff /etc/passwd $DIR/$tdir/${tfile}.new ||
+		error "$DIR/$tdir/${tfile}.new: diff has failed"
+	diff /etc/passwd /tmp/${uuid1}/${uuid2} ||
+		error "/tmp/${uuid1}/${uuid2}: diff has failed"
+
+	#check that getstripe still works
+	$LFS getstripe $DIR/$tdir/${tfile}.new ||
+		error "$DIR/$tdir/${tfile}.new: getstripe should still work with foreign_symlink enabled"
+
+	# chmod should still succeed
+	chmod 644 $DIR/$tdir/${tfile}.new ||
+		error "$DIR/$tdir/${tfile}.new: chmod has failed"
+
+	# chown should still succeed
+	chown $RUNAS_ID:$RUNAS_GID $DIR/$tdir/${tfile}.new ||
+		error "$DIR/$tdir/${tfile}.new: chown has failed"
+
+	# rename should still succeed
+	mv $DIR/$tdir/${tfile}.new $DIR/$tdir/${tfile} ||
+		error "$DIR/$tdir/${tfile}.new: rename has failed"
+
+	#remove foreign_symlink file should still fail
+	rm $DIR/$tdir/${tfile} &&
+		error "$DIR/$tdir/${tfile}: remove of foreign_symlink file should fail"
+
+	#use special ioctl() to unlink foreign_symlink file
+	$LFS unlink_foreign $DIR/$tdir/${tfile} ||
+		error "$DIR/$tdir/$tfile: unlink/ioctl failed"
+
+}
+run_test 27O "basic ops on foreign file of symlink type"
+
+test_27P() {
+	[[ $(lustre_version_code $SINGLEMDS) -le $(version_code 2.12.49) ]] &&
+		skip "Need MDS version newer than 2.12.49"
+
+	test_mkdir $DIR/$tdir
+	local uuid1=$(cat /proc/sys/kernel/random/uuid)
+	local uuid2=$(cat /proc/sys/kernel/random/uuid)
+
+	trap clean_foreign_symlink EXIT
+
+	# enable foreign_symlink behaviour
+	$LCTL set_param llite/$FSNAME-*/foreign_symlink_enable=1
+
+	# foreign symlink LMV format is a partial path by default
+
+	# create foreign dir (lfs + API)
+	$LFS mkdir --foreign=symlink --xattr="${uuid1}/${uuid2}" \
+		--flags=0xda05 --mode 0750 $DIR/$tdir/${tdir} ||
+		error "$DIR/$tdir/${tdir}: create failed"
+
+	$LFS getdirstripe -v $DIR/$tdir/${tdir} |
+		grep "lfm_magic:.*0x0CD50CD0" ||
+		error "$DIR/$tdir/${tdir}: invalid LMV EA magic"
+	$LFS getdirstripe -v $DIR/$tdir/${tdir} | grep "lfm_type:.*symlink" ||
+		error "$DIR/$tdir/${tdir}: invalid LMV EA type"
+	$LFS getdirstripe -v $DIR/$tdir/${tdir} |
+		grep "lfm_flags:.*0x0000DA05" ||
+		error "$DIR/$tdir/${tdir}: invalid LMV EA flags"
+	$LFS getdirstripe $DIR/$tdir/${tdir} |
+		grep "lfm_value.*${uuid1}/${uuid2}" ||
+		error "$DIR/$tdir/${tdir}: invalid LMV EA value"
+
+	# file create in dir should fail
+	# ("/{foreign_symlink_prefix}/${uuid1}/${uuid2}/" missing)
+	touch $DIR/$tdir/$tdir/$tfile && "$DIR/$tdir: file create should fail"
+
+	# rename should succeed
+	mv $DIR/$tdir/$tdir $DIR/$tdir/${tdir}.new ||
+		error "$DIR/$tdir/$tdir: rename of foreign_symlink dir has failed"
+
+	#remove foreign_symlink dir should fail
+	rmdir $DIR/$tdir/${tdir}.new &&
+		error "$DIR/$tdir/${tdir}.new: remove of foreign_symlink dir should fail"
+
+	#test fake symlink
+	mkdir -p /tmp/${uuid1}/${uuid2} ||
+		error "/tmp/${uuid1}/${uuid2}: mkdir has failed"
+	echo FOOFOO > /tmp/${uuid1}/${uuid2}/foo ||
+		error "/tmp/${uuid1}/${uuid2}/foo: echo has failed"
+	$LCTL set_param llite/$FSNAME-*/foreign_symlink_prefix=/tmp/
+	$CHECKSTAT -t link -l /tmp/${uuid1}/${uuid2} $DIR/$tdir/${tdir}.new ||
+		error "$DIR/$tdir/${tdir}.new: not seen as a symlink"
+	cat $DIR/$tdir/${tdir}.new/foo | grep FOOFOO ||
+		error "$DIR/$tdir/${tdir}.new: symlink resolution has failed"
+
+	#check that getstripe fails now that foreign_symlink enabled
+	$LFS getdirstripe $DIR/$tdir/${tdir}.new ||
+		error "$DIR/$tdir/${tdir}.new: getdirstripe should still work with foreign_symlink enabled"
+
+	# file create in dir should work now
+	cp /etc/passwd $DIR/$tdir/${tdir}.new/$tfile ||
+		error "$DIR/$tdir/${tdir}.new/$tfile: file create should fail"
+	diff /etc/passwd $DIR/$tdir/${tdir}.new/$tfile ||
+		error "$DIR/$tdir/${tdir}.new/$tfile: diff has failed"
+	diff /etc/passwd /tmp/${uuid1}/${uuid2}/$tfile ||
+		error "/tmp/${uuid1}/${uuid2}/$tfile: diff has failed"
+
+	# chmod should still succeed
+	chmod 755 $DIR/$tdir/${tdir}.new ||
+		error "$DIR/$tdir/${tdir}.new: chmod has failed"
+
+	# chown should still succeed
+	chown $RUNAS_ID:$RUNAS_GID $DIR/$tdir/${tdir}.new ||
+		error "$DIR/$tdir/${tdir}.new: chown has failed"
+
+	# rename should still succeed
+	mv $DIR/$tdir/${tdir}.new $DIR/$tdir/${tdir} ||
+		error "$DIR/$tdir/${tdir}.new: rename of foreign_symlink dir has failed"
+
+	#remove foreign_symlink dir should still fail
+	rmdir $DIR/$tdir/${tdir} &&
+		error "$DIR/$tdir/${tdir}: remove of foreign_symlink dir should fail"
+
+	#use special ioctl() to unlink foreign_symlink file
+	$LFS unlink_foreign $DIR/$tdir/${tdir} ||
+		error "$DIR/$tdir/$tdir: unlink/ioctl failed"
+
+	#created file should still exist
+	[[ -f /tmp/${uuid1}/${uuid2}/$tfile ]] ||
+		error "/tmp/${uuid1}/${uuid2}/$tfile has been removed"
+	diff /etc/passwd /tmp/${uuid1}/${uuid2}/$tfile ||
+		error "/tmp/${uuid1}/${uuid2}/$tfile: diff has failed"
+}
+run_test 27P "basic ops on foreign dir of foreign_symlink type"
+
+test_27Q() {
+	rm -f $TMP/$tfile $TMP/$tfile.loop $TMP/$tfile.none $TMP/$tfile.broken
+
+	test_mkdir $DIR/$tdir-1
+	test_mkdir $DIR/$tdir-2
+
+	echo 'It is what it is' > $DIR/$tdir-1/$tfile
+	lov_getstripe_old $DIR/$tdir-1/$tfile || error "$DIR/$tdir-1/$tfile: rc = $?"
+
+	ln -s $DIR/$tdir-1/$tfile $DIR/$tdir-2/$tfile
+	lov_getstripe_old $DIR/$tdir-2/$tfile || error "$DIR/$tdir-2/$tfile: rc = $?"
+
+	ln -s $DIR/$tdir-1/$tfile $TMP/$tfile
+	lov_getstripe_old $TMP/$tfile || error "$TMP/$tfile: rc = $?"
+
+	# Create some bad symlinks and ensure that we don't loop
+	# forever or something. These should return ELOOP (40) and
+	# ENOENT (2) but I don't want to test for that because there's
+	# always some weirdo architecture that needs to ruin
+	# everything by defining these error numbers differently.
+
+	ln -s $TMP/$tfile.loop $TMP/$tfile.loop
+	lov_getstripe_old $TMP/$tfile.loop && error "$TMP/$tfile.loop: rc = $?"
+
+	ln -s $TMP/$tfile.none $TMP/$tfile.broken
+	lov_getstripe_old $TMP/$tfile.broken && error "$TMP/$tfile.broken: rc = $?"
+
+	return 0
+}
+run_test 27Q "llapi_file_get_stripe() works on symlinks"
+
 # createtest also checks that device nodes are created and
 # then visible correctly (#2091)
 test_28() { # bug 2091
